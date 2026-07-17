@@ -163,8 +163,15 @@ export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext) {
 		const url = new URL(request.url);
 
-		if (url.pathname === "/mcp") {
+		// Streamable HTTP (current MCP spec) and legacy SSE transport, both
+		// backed by the same McpAgent — ZVA (and most MCP clients) can use
+		// either; startsWith guards the SSE sub-path used to post messages
+		// back (/sse/message).
+		if (url.pathname.startsWith("/mcp")) {
 			return MyMCP.serve("/mcp").fetch(request, env, ctx);
+		}
+		if (url.pathname.startsWith("/sse")) {
+			return MyMCP.serveSSE("/sse").fetch(request, env, ctx);
 		}
 
 		// Editable admin UI, meant to be routed at app.eno.solutions/db*
