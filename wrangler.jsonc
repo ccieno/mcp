@@ -1,0 +1,42 @@
+/**
+ * Wrangler configuration for the ZVA demo MCP server.
+ * Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "zva-demo-mcp",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-03-10",
+	"compatibility_flags": ["nodejs_compat"],
+	"migrations": [
+		{
+			"new_sqlite_classes": ["MyMCP"],
+			"tag": "v1"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"class_name": "MyMCP",
+				"name": "MCP_OBJECT"
+			}
+		]
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "zva-demo-db",
+			"database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+		}
+	],
+	"observability": {
+		"enabled": true
+	}
+	// To publish the /db admin UI at app.eno.solutions/db, either add a
+	// route here (uncomment + set your real zone_name) or add it via
+	// Cloudflare dashboard: Workers & Pages -> zva-demo-mcp -> Settings ->
+	// Domains & Routes -> Add route. See README for details.
+	// "routes": [
+	// 	{ "pattern": "app.eno.solutions/db*", "zone_name": "eno.solutions" }
+	// ]
+}

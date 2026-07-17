@@ -1,0 +1,128 @@
+# ZVA Demo MCP Server
+
+A small Cloudflare Worker that demos a Zoom Virtual Agent (ZVA) backend: order
+details, customer account lookups, and product inventory, backed by a
+Cloudflare D1 database. It exposes the same three lookups two ways:
+
+- **MCP** at `/mcp` — for AI clients that speak the Model Context Protocol
+  (Claude Desktop, the Cloudflare AI Playground, MCP Inspector, or a custom
+  agent).
+- **Plain REST** at `/api/...` — for Zoom Virtual Agent's flow-builder
+  **Custom API** / Action step, which calls a regular JSON HTTP endpoint, not
+  raw MCP. Use this path to actually wire the data into a ZVA bot flow.
+- **Admin UI** at `/db` — a small editable-table view over all four tables,
+  meant to be published at `https://app.eno.solutions/db` behind your
+  existing Cloudflare Access (Google SSO) policy.
+
+## What's included
+
+| Data | MCP tool | REST endpoint |
+|---|---|---|
+| Order details | `get_order_details(order_id)` | `GET /api/orders/:order_id` |
+| Customer account lookup | `lookup_customer_account(query)` | `GET /api/customers?query=` |
+| Product inventory | `check_product_inventory(query)` | `GET /api/products?query=` |
+
+`query` matches on account ID / email / name (customers) or SKU / name
+(products). Sample seed data lives in `schema.sql` (6 customers, 8 products,
+8 orders with line items).
+
+## Project layout
+
+```
+src/index.ts   MCP agent (McpAgent) + Worker fetch handler / router
+src/db.ts      Shared D1 query logic used by both MCP and REST
+src/rest.ts    Plain REST router for ZVA Custom API actions
+src/admin.ts   Editable admin UI + JSON API, served at /db
+schema.sql     D1 schema + seed data
+wrangler.jsonc Worker + Durable Object + D1 binding config
+```
+
+## Prerequisites
+
+- Node.js 18+
+- A Cloudflare account (free tier is fine) and the [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) (installed as a dependency below)
+
+## Setup
+
+```bash
+npm install
+npx wrangler login          # opens a browser to authorize Wrangler
+
+# Create the D1 database
+npx wrangler d1 create zva-demo-db
+# Copy the returned database_id into wrangler.jsonc (d1_databases[0].database_id)
+
+# Load schema + seed data
+npm run db:init             # local dev DB
+npm run db:init:remote      # the real, deployed D1 instance
+
+# Run locally
+npm run dev                 # serves http://localhost:8787/mcp and /api/*
+
+# Deploy
+npm run deploy               # prints your worker URL, e.g. https://zva-demo-mcp.<subdomain>.workers.dev
+```
+
+## Testing the MCP endpoint
+
+Point the [Cloudflare AI Playground](https://playground.ai.cloudflare.com/) or
+[MCP Inspector](https://github.com/modelcontextprotocol/inspector) at:
+
+```
+https://zva-demo-mcp.<your-subdomain>.workers.dev/mcp
+```
+
+For MCP clients that only support local/stdio servers (e.g. Claude Desktop),
+use the `mcp-remote` proxy to bridge to the remote endpoint — see
+[Cloudflare's remote MCP guide](https://developers.cloudflare.com/agents/model-context-protocol/guides/remote-mcp-server/).
+
+## Wiring into a Zoom Virtual Agent flow
+
+In the ZVA flow builder, add an **Action** step calling a **Custom API**, and
+point it at the REST endpoints above, e.g.:
+
+```
+GET https://zva-demo-mcp.<your-subdomain>.workers.dev/api/orders/ORD-5001
+GET https://zva-demo-mcp.<your-subdomain>.workers.dev/api/customers?query=dana.whitfield@brightloop.io
+GET https://zva-demo-mcp.<your-subdomain>.workers.dev/api/products?query=headset
+```
+
+Map the JSON response fields to flow variables to surface them in the bot's
+reply. This demo has no authentication — for anything beyond a demo, add an
+API key check in `src/rest.ts` before pointing a real ZVA instance at it.
+
+## Publishing the DB admin UI at app.eno.solutions/db
+
+`/db` is served by this same Worker (it already owns the D1 binding), so
+there's no separate app to deploy — you just need to route that one path on
+your zone to this Worker, alongside whatever already serves the rest of
+`app.eno.solutions`. This does **not** touch your existing Worker's code.
+
+1. Deploy this Worker (`npm run deploy`) so it exists in your account.
+2. Add a route for just this path, either:
+   - **Dashboard:** Workers & Pages → `zva-demo-mcp` → Settings → Domains &
+     Routes → Add → pattern `app.eno.solutions/db*`, or
+   - **wrangler.jsonc:** uncomment the `routes` block at the bottom, set
+     `zone_name` to your actual zone (e.g. `eno.solutions`), then
+     `npm run deploy` again.
+3. Since Cloudflare Access already protects `app.eno.solutions`, the `/db`
+   path inherits that policy automatically once routed — no new Access
+   application needed. The page reads the `Cf-Access-Authenticated-User-Email`
+   header Access injects, just to show who's signed in; it doesn't enforce
+   auth itself, so don't expose this route without Access (or your own
+   auth) in front of it.
+4. Add a link to `/db` from your `app.eno.solutions` homepage yourself if you
+   want it discoverable from `/` — this Worker only serves the `/db` path
+   itself.
+
+Every cell marked editable in the table (name, price, stock, status, etc.)
+saves via `PATCH` on blur/change; read-only columns (IDs, timestamps) are
+shown as plain text.
+
+## Notes
+
+- This is a mock backend with a handful of seed rows for demo purposes, not
+  a real order/inventory system.
+- MCP (`/mcp`) and ZVA's Custom API action (`/api/...`) are different
+  protocols — the MCP endpoint is for MCP-speaking AI clients/tooling, the
+  REST endpoints are what ZVA itself can actually call from a flow.

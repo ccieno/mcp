@@ -1,0 +1,127 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpAgent } from "agents/mcp";
+import { z } from "zod";
+import { checkProductInventory, getOrderDetails, lookupCustomerAccount } from "./db";
+import { handleRest } from "./rest";
+import { handleAdmin } from "./admin";
+
+interface Env {
+	DB: D1Database;
+	MCP_OBJECT: DurableObjectNamespace<MyMCP>;
+}
+
+// Demo backend for Zoom Virtual Agent: exposes order details, customer
+// account lookup, and product inventory as MCP tools backed by D1.
+export class MyMCP extends McpAgent<Env> {
+	server = new McpServer({
+		name: "ZVA Demo Backend",
+		version: "1.0.0",
+	});
+
+	async init() {
+		this.server.registerTool(
+			"get_order_details",
+			{
+				description:
+					"Look up a customer order and its line items by order ID (e.g. ORD-5001).",
+				inputSchema: {
+					order_id: z.string().describe("Order ID, e.g. ORD-5001"),
+				},
+			},
+			async ({ order_id }) => {
+				const result = await getOrderDetails(this.env.DB, order_id);
+
+				if (!result) {
+					return {
+						content: [
+							{ type: "text", text: `No order found with ID "${order_id}".` },
+						],
+					};
+				}
+
+				return {
+					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+				};
+			},
+		);
+
+		this.server.registerTool(
+			"lookup_customer_account",
+			{
+				description:
+					"Find a customer account by account ID, email, or name, and list their 5 most recent orders.",
+				inputSchema: {
+					query: z
+						.string()
+						.describe("Account ID (ACC-1001), email, or customer name"),
+				},
+			},
+			async ({ query }) => {
+				const result = await lookupCustomerAccount(this.env.DB, query);
+
+				if (!result) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `No customer account found matching "${query}".`,
+							},
+						],
+					};
+				}
+
+				return {
+					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+				};
+			},
+		);
+
+		this.server.registerTool(
+			"check_product_inventory",
+			{
+				description:
+					"Check stock level, price, and warehouse location for one or more products matching a SKU or name.",
+				inputSchema: {
+					query: z.string().describe("Product SKU (SKU-2001) or product name"),
+				},
+			},
+			async ({ query }) => {
+				const products = await checkProductInventory(this.env.DB, query);
+
+				if (!products.length) {
+					return {
+						content: [
+							{ type: "text", text: `No products found matching "${query}".` },
+						],
+					};
+				}
+
+				return {
+					content: [{ type: "text", text: JSON.stringify(products, null, 2) }],
+				};
+			},
+		);
+	}
+}
+
+export default {
+	async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+		const url = new URL(request.url);
+
+		if (url.pathname === "/mcp") {
+			return MyMCP.serve("/mcp").fetch(request, env, ctx);
+		}
+
+		// Editable admin UI, meant to be routed at app.eno.solutions/db*
+		// behind Cloudflare Access (see README).
+		const adminResponse = await handleAdmin(request, env);
+		if (adminResponse) return adminResponse;
+
+		// Plain REST endpoints for Zoom Virtual Agent's flow-builder
+		// Custom API actions (see README for setup).
+		const restResponse = await handleRest(request, env);
+		if (restResponse) return restResponse;
+
+		return new Response("Not found", { status: 404 });
+	},
+};

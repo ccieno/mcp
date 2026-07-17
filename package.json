@@ -1,0 +1,24 @@
+{
+	"name": "zva-demo-mcp",
+	"version": "0.0.0",
+	"private": true,
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"start": "wrangler dev",
+		"db:init": "wrangler d1 execute zva-demo-db --file=./schema.sql",
+		"db:init:remote": "wrangler d1 execute zva-demo-db --remote --file=./schema.sql",
+		"cf-typegen": "wrangler types",
+		"type-check": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.29.0",
+		"agents": "^0.17.4",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^5.20260717.1",
+		"typescript": "^5.7.3",
+		"wrangler": "^4.112.0"
+	}
+}
