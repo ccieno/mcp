@@ -49,14 +49,20 @@ CREATE TABLE order_items (
 CREATE INDEX idx_orders_customer ON orders(customer_id);
 CREATE INDEX idx_order_items_order ON order_items(order_id);
 
--- Customers
+-- Customers. Phone numbers use Ofcom's reserved "drama numbers" ranges
+-- (safe to publish — never allocated to real subscribers): geographic
+-- +441632960000-960999, mobile +447700900000-900999, both E.164 formatted.
+-- Joe Bloggs and James Smith are guaranteed test records with fixed numbers
+-- (kept in sync by Generate Records too — see src/admin.ts).
 INSERT INTO customers (id, name, email, company, plan_tier, account_status, created_at, phone_number, language, loyalty_tier) VALUES
-('ACC-1001', 'Dana Whitfield', 'dana.whitfield@brightloop.io', 'Brightloop', 'Business', 'Active', '2023-02-14', '+1-206-555-0142', 'en', 'Gold'),
-('ACC-1002', 'Marcus Ide', 'marcus.ide@nordlyworks.com', 'Nordly Works', 'Pro', 'Active', '2023-05-30', '+1-312-555-0187', 'en', 'Silver'),
-('ACC-1003', 'Priya Naik', 'priya.naik@fernhollow.co', 'Fern Hollow', 'Free', 'Active', '2024-01-09', '+44-20-7946-0958', 'en', 'Bronze'),
-('ACC-1004', 'Oliver Bass', 'oliver.bass@quarrytech.com', 'Quarry Tech', 'Business', 'Past Due', '2022-11-02', '+1-617-555-0173', 'en', 'Gold'),
-('ACC-1005', 'Selene Marsh', 'selene.marsh@cobaltline.com', 'Cobalt Line', 'Pro', 'Suspended', '2023-09-18', '+61-2-5550-1122', 'en', 'Silver'),
-('ACC-1006', 'Terrence Boyle', 'terrence.boyle@driftandco.com', 'Drift & Co', 'Business', 'Active', '2021-07-21', '+1-415-555-0199', 'en', 'Platinum');
+('ACC-1001', 'Dana Whitfield', 'dana.whitfield@brightloop.io', 'Brightloop', 'Business', 'Active', '2023-02-14', '+441632960142', 'en', 'Gold'),
+('ACC-1002', 'Marcus Ide', 'marcus.ide@nordlyworks.com', 'Nordly Works', 'Pro', 'Active', '2023-05-30', '+447700900187', 'en', 'Silver'),
+('ACC-1003', 'Priya Naik', 'priya.naik@fernhollow.co', 'Fern Hollow', 'Free', 'Active', '2024-01-09', '+441632960958', 'en', 'Bronze'),
+('ACC-1004', 'Oliver Bass', 'oliver.bass@quarrytech.com', 'Quarry Tech', 'Business', 'Past Due', '2022-11-02', '+447700900173', 'en', 'Gold'),
+('ACC-1005', 'Selene Marsh', 'selene.marsh@cobaltline.com', 'Cobalt Line', 'Pro', 'Suspended', '2023-09-18', '+441632960122', 'en', 'Silver'),
+('ACC-1006', 'Terrence Boyle', 'terrence.boyle@driftandco.com', 'Drift & Co', 'Business', 'Active', '2021-07-21', '+447700900199', 'en', 'Platinum'),
+('ACC-1007', 'Joe Bloggs', 'joe.bloggs@example.com', 'Bloggs & Co', 'Free', 'Active', '2024-03-11', '+447794516641', 'en', 'Bronze'),
+('ACC-1008', 'James Smith', 'james.smith@example.com', 'Smith Consulting', 'Pro', 'Active', '2023-08-22', '+442038852824', 'en', 'Silver');
 
 -- Products
 INSERT INTO products (sku, name, category, price, stock_quantity, warehouse_location) VALUES

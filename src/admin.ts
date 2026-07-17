@@ -294,6 +294,56 @@ async function callOpenAI(
 	return Array.isArray(parsed.rows) ? parsed.rows : [];
 }
 
+// UK numbers reserved by Ofcom for fictional/drama use — safe to generate
+// freely, guaranteed never to be a real subscriber. E.164 formatted.
+const OFCOM_MOBILE_PREFIX = "+447700900"; // 07700 900000-900999
+const OFCOM_GEOGRAPHIC_PREFIX = "+441632960"; // 01632 960000-960999
+
+function randomOfcomPhoneNumber(): string {
+	const suffix = String(Math.floor(Math.random() * 1000)).padStart(3, "0");
+	const prefix = Math.random() < 0.5 ? OFCOM_MOBILE_PREFIX : OFCOM_GEOGRAPHIC_PREFIX;
+	return prefix + suffix;
+}
+
+// Fixed test customers that must always exist after a (re)generation,
+// regardless of business type — real numbers outside the Ofcom-safe
+// ranges, used deliberately for a specific test purpose.
+const GUARANTEED_CUSTOMERS = [
+	{ name: "Joe Bloggs", phone: "+447794516641", email: "joe.bloggs@example.com" },
+	{ name: "James Smith", phone: "+442038852824", email: "james.smith@example.com" },
+];
+
+function findColumn(table: TableConfig, pattern: RegExp, exclude?: RegExp): string | undefined {
+	return table.columns.find((c) => pattern.test(c.name) && !(exclude && exclude.test(c.name)))?.name;
+}
+
+/** Any generated column that looks like a phone number gets overwritten
+ * with an Ofcom-safe E.164 UK number — deterministic, so this holds
+ * regardless of what the model actually produced. */
+function enforcePhoneFormat(table: TableConfig, rows: Array<Record<string, unknown>>) {
+	const phoneCol = findColumn(table, /phone/i);
+	if (!phoneCol) return;
+	for (const row of rows) row[phoneCol] = randomOfcomPhoneNumber();
+}
+
+/** The "customers" collection specifically always includes Joe Bloggs and
+ * James Smith with their fixed numbers, overwriting whichever two rows the
+ * model generated first. */
+function enforceGuaranteedCustomers(table: TableConfig, rows: Array<Record<string, unknown>>) {
+	if (table.name !== "customers") return;
+	const nameCol = findColumn(table, /name/i, /company|product|category/i);
+	if (!nameCol) return;
+	const phoneCol = findColumn(table, /phone/i);
+	const emailCol = findColumn(table, /email/i);
+
+	GUARANTEED_CUSTOMERS.forEach((person, i) => {
+		if (!rows[i]) return;
+		rows[i][nameCol] = person.name;
+		if (phoneCol) rows[i][phoneCol] = person.phone;
+		if (emailCol) rows[i][emailCol] = person.email;
+	});
+}
+
 /** Generalized FK repair using real schema metadata (works for any
  * collection, not just the original 4 tables) — replaces any foreign-key
  * value the model got wrong with a real value from the referenced table's
@@ -333,6 +383,12 @@ async function generateRecords(db: D1Database, apiKey: string, businessType: str
 	);
 	const data: Record<string, Array<Record<string, unknown>>> = {};
 	for (const r of results) data[r.name] = r.rows;
+
+	for (const table of tables) {
+		const rows = data[table.name] || [];
+		enforcePhoneFormat(table, rows);
+		enforceGuaranteedCustomers(table, rows);
+	}
 
 	repairForeignKeys(tables, fkMap, data);
 
