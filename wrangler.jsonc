@@ -29,13 +29,13 @@
 			"database_id": "da455853-8728-4d71-b2aa-a870e098eb7e"
 		}
 	],
-	"ai": {
-		"binding": "AI"
-	},
 	"observability": {
 		"enabled": true
 	},
 	"routes": [
 		{ "pattern": "app.eno.solutions/db*", "zone_name": "eno.solutions" }
 	]
+	// Generate Records calls OpenAI directly. Set the key as a secret (never
+	// commit it): `npx wrangler secret put OPENAI_API_KEY`. For local `wrangler
+	// dev`, put OPENAI_API_KEY=sk-... in a .dev.vars file instead (gitignored).
 }

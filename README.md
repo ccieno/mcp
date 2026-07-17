@@ -21,16 +21,22 @@ Cloudflare D1 database. It exposes the same three lookups two ways:
 | Order details | `get_order_details(order_id)` | `GET /api/orders/:order_id` |
 | Customer account lookup | `lookup_customer_account(query)` | `GET /api/customers?query=` |
 | Product inventory | `check_product_inventory(query)` | `GET /api/products?query=` |
+| Any collection (generic) | `query_collection(collection, query?)` | `GET /api/collections/:name?query=` |
 
-`query` matches on account ID / email / name (customers) or SKU / name
-(products). Sample seed data lives in `schema.sql` (6 customers, 8 products,
-8 orders with line items).
+`query` matches the row's ID plus any text column (email, name, phone
+number, etc. — whatever text columns currently exist). Sample seed data
+lives in `schema.sql` (6 customers, 8 products, 8 orders with line items).
+
+`query_collection` / `/api/collections/:name` works over **any** table,
+including ones you add later via **+ Collection** in the admin UI — no code
+change needed for new collections to become queryable.
 
 ## Project layout
 
 ```
 src/index.ts   MCP agent (McpAgent) + Worker fetch handler / router
-src/db.ts      Shared D1 query logic used by both MCP and REST
+src/schema.ts  Shared live D1 schema introspection (tables, columns, FKs)
+src/db.ts      Shared query logic used by both MCP and REST — schema-driven
 src/rest.ts    Plain REST router for ZVA Custom API actions
 src/admin.ts   Editable admin UI + JSON API, served at /db
 schema.sql     D1 schema + seed data
@@ -55,6 +61,12 @@ npx wrangler d1 create zva-demo-db
 # Load schema + seed data
 npm run db:init             # local dev DB
 npm run db:init:remote      # the real, deployed D1 instance
+
+# Generate Records needs an OpenAI key with billing set up (platform.openai.com —
+# a ChatGPT subscription alone does not include API access)
+npx wrangler secret put OPENAI_API_KEY   # prompts for the key, stores it encrypted
+# For local `wrangler dev`, instead create a .dev.vars file (gitignored):
+#   echo 'OPENAI_API_KEY=sk-...' > .dev.vars
 
 # Run locally
 npm run dev                 # serves http://localhost:8787/mcp and /api/*
@@ -136,15 +148,22 @@ change things:
   whatever columns you define) and it shows up as a new tab right away.
 - **✨ Generate Records** — pick a business type (25 presets, or "Other" to
   describe your own) and it replaces the rows in every collection with data
-  generated for that business via Workers AI (e.g. a travel company gets
+  generated for that business via OpenAI (e.g. a travel company gets
   destination packages as "products"; a clothing company gets garments).
-  Known relationships (orders → customers, order_items → orders/products)
-  are repaired after generation in case the model drifts.
+  Fires one small structured-output request per collection *in parallel*
+  (rather than one giant combined request) for speed and reliability, then
+  repairs foreign keys afterward using D1's real `PRAGMA foreign_key_list`
+  metadata — this works for any collection, including ones you added
+  yourself, not just the original four tables. The modal shows a live
+  "Processing… (Ns)" indicator and gives up client-side after 28s with a
+  clear failed state (the server-side generation may still complete after
+  that — reload the table if so).
 
-**Requires Workers AI:** the `AI` binding in `wrangler.jsonc` needs Workers AI
-enabled on your Cloudflare account (small per-request cost/usage against your
-account's Workers AI allowance; no separate API key needed). If Generate
-Records errors, check `npx wrangler tail` for the actual failure.
+**Requires an OpenAI API key** with billing enabled at platform.openai.com
+(see Setup above) — stored as a Wrangler secret, never committed. If
+Generate Records errors, the message returned is OpenAI's own error text
+(e.g. invalid key, rate limit); for anything unclear, `npx wrangler tail`
+shows the full request.
 
 ## Notes
 
@@ -153,9 +172,21 @@ Records errors, check `npx wrangler tail` for the actual failure.
 - MCP (`/mcp`) and ZVA's Custom API action (`/api/...`) are different
   protocols — the MCP endpoint is for MCP-speaking AI clients/tooling, the
   REST endpoints are what ZVA itself can actually call from a flow.
-- **Known limitation:** the MCP tools (`src/index.ts`) and REST handlers
-  (`src/db.ts`) are written against the *original* column names
-  (`customers.name`, `orders.status`, `order_items.product_sku`, etc.). If
-  you rename or remove those specific columns from the admin UI, those tools
-  will break until you update the queries in `src/db.ts` to match. Adding new
-  columns or new collections doesn't affect them.
+- The three named MCP tools/REST endpoints (`get_order_details`,
+  `lookup_customer_account`, `check_product_inventory`) and the generic
+  `query_collection` tool all introspect the live schema (`src/schema.ts`)
+  rather than hardcoding column names, so renaming or adding columns —
+  even the ones just added (`phone_number`, `delivery_date`, etc.) — doesn't
+  break them, and brand new collections are automatically reachable through
+  `query_collection` / `/api/collections/:name` with no code change. The one
+  thing that *can't* be papered over: if you rename or delete the table
+  itself (`orders`, `customers`, `products`) or the foreign key linking them
+  (e.g. `orders.customer_id`), the tool that depends on that specific
+  relationship returns a clear error naming what's missing rather than
+  silently breaking — that's a real behavior change, not a bug.
+- The JSON shape returned by `get_order_details` / `lookup_customer_account`
+  nests related rows under the actual table name (e.g. `order.customers`,
+  `order.order_items`) instead of flattening prefixed fields like
+  `customer_name` — this is what makes it schema-agnostic. If you've already
+  wired a ZVA flow to the old flattened shape, its field mappings will need
+  updating.

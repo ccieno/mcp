@@ -3,104 +3,26 @@
 // like app.eno.solutions/db* — this Worker does not implement its own
 // auth, it trusts Access to gate access before requests arrive.
 //
-// Schema is introspected live from D1 (sqlite_master + PRAGMA table_info)
-// rather than hardcoded, so adding/renaming columns or adding whole new
-// "collections" (tables) from the UI just works without a code change.
+// Schema is introspected live from D1 (see src/schema.ts) rather than
+// hardcoded, so adding/renaming columns or adding whole new "collections"
+// (tables) from the UI just works without a code change.
+
+import {
+	type ColumnType,
+	type ForeignKey,
+	type TableConfig,
+	assertIdentifier,
+	columnTypeToSql,
+	getAllTableConfigs,
+	getForeignKeys,
+	getTableConfig,
+	listTableNames,
+	topoSortByForeignKeys,
+} from "./schema";
 
 interface Env {
 	DB: D1Database;
-	AI: Ai;
-}
-
-type ColumnType = "text" | "number";
-
-interface ColumnConfig {
-	name: string;
-	label: string;
-	type: ColumnType;
-	editable: boolean;
-}
-
-interface TableConfig {
-	name: string;
-	label: string;
-	pk: string; // column used in WHERE clause for updates; "rowid" if no declared PK
-	pkIsRowid: boolean;
-	columns: ColumnConfig[];
-}
-
-const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const RESERVED_NAMES = new Set(["rowid", "oid", "_rowid_"]);
-
-function assertIdentifier(name: string, kind: string): void {
-	if (!IDENTIFIER_RE.test(name) || RESERVED_NAMES.has(name.toLowerCase())) {
-		throw new Error(
-			`Invalid ${kind} "${name}" — use letters, numbers, and underscores, starting with a letter or underscore.`,
-		);
-	}
-}
-
-function prettifyLabel(name: string): string {
-	return name
-		.split("_")
-		.map((w) => (w.length ? w[0].toUpperCase() + w.slice(1) : w))
-		.join(" ");
-}
-
-function sqlTypeToColumnType(sqlType: string): ColumnType {
-	const t = sqlType.toUpperCase();
-	if (t.includes("INT") || t.includes("REAL") || t.includes("FLOA") || t.includes("DOUB") || t.includes("NUMERIC")) {
-		return "number";
-	}
-	return "text";
-}
-
-function columnTypeToSql(type: ColumnType): string {
-	return type === "number" ? "REAL" : "TEXT";
-}
-
-async function listTableNames(db: D1Database): Promise<string[]> {
-	const { results } = await db
-		.prepare(
-			`SELECT name FROM sqlite_master
-			 WHERE type = 'table'
-			   AND name NOT LIKE 'sqlite_%'
-			   AND name NOT LIKE 'd1_%'
-			   AND name NOT LIKE '_cf_%'
-			 ORDER BY name`,
-		)
-		.all<{ name: string }>();
-	return results.map((r) => r.name);
-}
-
-async function getTableConfig(db: D1Database, tableName: string): Promise<TableConfig> {
-	const { results: pragma } = await db
-		.prepare(`PRAGMA table_info("${tableName}")`)
-		.all<{ name: string; type: string; pk: number }>();
-
-	if (!pragma.length) throw new Error(`Unknown table "${tableName}"`);
-
-	const pkCols = pragma.filter((c) => c.pk > 0).sort((a, b) => a.pk - b.pk);
-	const pkIsRowid = pkCols.length !== 1;
-	const pk = pkIsRowid ? "rowid" : pkCols[0].name;
-
-	const columns: ColumnConfig[] = pragma.map((c) => ({
-		name: c.name,
-		label: prettifyLabel(c.name),
-		type: sqlTypeToColumnType(c.type || "TEXT"),
-		editable: c.pk === 0,
-	}));
-
-	if (pkIsRowid) {
-		columns.unshift({ name: "rowid", label: "Row", type: "number", editable: false });
-	}
-
-	return { name: tableName, label: prettifyLabel(tableName), pk, pkIsRowid, columns };
-}
-
-async function getAllTableConfigs(db: D1Database): Promise<TableConfig[]> {
-	const names = await listTableNames(db);
-	return Promise.all(names.map((n) => getTableConfig(db, n)));
+	OPENAI_API_KEY: string;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -182,19 +104,6 @@ async function nextGeneratedId(db: D1Database, table: TableConfig): Promise<stri
 	return `${prefix}${maxN + 1}`;
 }
 
-interface ForeignKey {
-	from: string;
-	table: string;
-	to: string;
-}
-
-async function getForeignKeys(db: D1Database, tableName: string): Promise<ForeignKey[]> {
-	const { results } = await db
-		.prepare(`PRAGMA foreign_key_list("${tableName}")`)
-		.all<{ from: string; table: string; to: string }>();
-	return results.map((r) => ({ from: r.from, table: r.table, to: r.to }));
-}
-
 async function addRow(db: D1Database, tableName: string, values: Record<string, unknown>) {
 	const table = await getTableConfig(db, tableName);
 
@@ -255,7 +164,7 @@ async function createCollection(
 	await db.prepare(`CREATE TABLE "${name}" (id TEXT PRIMARY KEY, ${colDefs})`).run();
 }
 
-// ---- Generate Records (Workers AI) ----
+// ---- Generate Records (OpenAI) ----
 
 const BUSINESS_TYPES = [
 	"Holiday & Travel",
@@ -293,151 +202,150 @@ function rowCountFor(tableName: string): number {
 	return 6;
 }
 
-function buildJsonSchema(tables: TableConfig[]) {
-	const properties: Record<string, unknown> = {};
-	const required: string[] = [];
-
-	for (const table of tables) {
-		const itemProps: Record<string, unknown> = {};
-		const itemRequired: string[] = [];
-		for (const col of table.columns) {
-			if (col.name === "rowid") continue;
-			itemProps[col.name] = { type: col.type === "number" ? "number" : "string" };
-			itemRequired.push(col.name);
-		}
-		properties[table.name] = {
-			type: "array",
-			minItems: Math.max(3, rowCountFor(table.name) - 2),
-			maxItems: rowCountFor(table.name) + 2,
-			items: {
-				type: "object",
-				properties: itemProps,
-				required: itemRequired,
+/** OpenAI structured-output ("strict" json_schema) shape for one table's rows. */
+function buildTableSchema(table: TableConfig) {
+	const itemProps: Record<string, unknown> = {};
+	const itemRequired: string[] = [];
+	for (const col of table.columns) {
+		if (col.name === "rowid") continue;
+		itemProps[col.name] = { type: col.type === "number" ? "number" : "string" };
+		itemRequired.push(col.name);
+	}
+	return {
+		type: "object",
+		properties: {
+			rows: {
+				type: "array",
+				items: {
+					type: "object",
+					properties: itemProps,
+					required: itemRequired,
+					additionalProperties: false,
+				},
 			},
-		};
-		required.push(table.name);
-	}
-
-	return { type: "object", properties, required };
+		},
+		required: ["rows"],
+		additionalProperties: false,
+	};
 }
 
-function buildPrompt(businessType: string, tables: TableConfig[]): string {
-	const lines: string[] = [];
-	lines.push(
-		`Generate a realistic, internally consistent sample dataset for a demo backend belonging to a "${businessType}" business.`,
-	);
-	lines.push(`Return JSON with one array per collection, matching this structure:`);
-	for (const table of tables) {
-		const colDesc = table.columns
-			.filter((c) => c.name !== "rowid")
-			.map((c) => `${c.name} (${c.type})`)
-			.join(", ");
-		lines.push(`- "${table.name}": ~${rowCountFor(table.name)} rows, columns: ${colDesc}`);
-	}
-	lines.push(
-		`Make the content specific to "${businessType}" — e.g. for a travel company, products are destinations/packages; for a clothing company, products are garments; adapt every table's values (names, categories, statuses) to fit the business, not just the products.`,
-	);
-	if (tables.some((t) => t.name === "orders") && tables.some((t) => t.name === "customers")) {
-		lines.push(
-			`Every "orders" row's customer_id must exactly match the id of one of the generated "customers" rows.`,
-		);
-	}
-	if (
-		tables.some((t) => t.name === "order_items") &&
-		tables.some((t) => t.name === "orders") &&
-		tables.some((t) => t.name === "products")
-	) {
-		lines.push(
-			`Every "order_items" row's order_id must exactly match the id of one of the generated "orders" rows, and product_sku must exactly match the sku of one of the generated "products" rows.`,
-		);
-	}
-	lines.push(
-		`Use plausible IDs like ACC-1001, ORD-5001, SKU-2001 style codes where a column looks like an identifier. Output JSON only, no commentary.`,
-	);
-	return lines.join("\n");
+function buildTablePrompt(businessType: string, table: TableConfig): string {
+	const count = rowCountFor(table.name);
+	const colDesc = table.columns
+		.filter((c) => c.name !== "rowid")
+		.map((c) => `${c.name} (${c.type})`)
+		.join(", ");
+	return [
+		`Generate about ${count} realistic sample rows for the "${table.label}" collection of a demo backend belonging to a "${businessType}" business.`,
+		`Columns: ${colDesc}.`,
+		`Make every value specific and appropriate to a "${businessType}" business — names, categories, statuses, everything should read like real data for that kind of company, not generic placeholders.`,
+		`Use plausible ID-style codes (e.g. ACC-1001, ORD-5001, SKU-2001 style) for any column that looks like an identifier or foreign key — exact cross-table matching isn't necessary, that gets reconciled separately.`,
+		`Output JSON only.`,
+	].join("\n");
 }
 
-/** Best-effort repair of the well-known foreign-key relationships so the
- * demo stays internally consistent even if the AI drifts slightly. */
-function repairKnownRelationships(data: Record<string, unknown[]>) {
-	const customers = data.customers as Array<Record<string, unknown>> | undefined;
-	const products = data.products as Array<Record<string, unknown>> | undefined;
-	const orders = data.orders as Array<Record<string, unknown>> | undefined;
-	const orderItems = data.order_items as Array<Record<string, unknown>> | undefined;
-
-	if (orders && customers?.length) {
-		const ids = customers.map((c) => c.id).filter(Boolean);
-		if (ids.length) {
-			for (const o of orders) {
-				if (!ids.includes(o.customer_id)) o.customer_id = ids[Math.floor(Math.random() * ids.length)];
-			}
-		}
-	}
-	if (orderItems && orders?.length) {
-		const ids = orders.map((o) => o.id).filter(Boolean);
-		if (ids.length) {
-			for (const oi of orderItems) {
-				if (!ids.includes(oi.order_id)) oi.order_id = ids[Math.floor(Math.random() * ids.length)];
-			}
-		}
-	}
-	if (orderItems && products?.length) {
-		const skus = products.map((p) => p.sku).filter(Boolean);
-		if (skus.length) {
-			for (const oi of orderItems) {
-				if (!skus.includes(oi.product_sku)) oi.product_sku = skus[Math.floor(Math.random() * skus.length)];
-			}
-		}
-	}
-}
-
-async function generateRecords(db: D1Database, ai: Ai, businessType: string) {
-	const tables = await getAllTableConfigs(db);
-	const schema = buildJsonSchema(tables);
-	const prompt = buildPrompt(businessType, tables);
-
-	const aiResponse: any = await ai.run("@cf/meta/llama-3.3-70b-instruct-fp8-fast", {
-		messages: [
-			{
-				role: "system",
-				content:
-					"You generate realistic sample demo data as strict JSON matching the given schema. Output only JSON, no prose, no markdown fences.",
+async function callOpenAI(
+	apiKey: string,
+	businessType: string,
+	table: TableConfig,
+): Promise<Record<string, unknown>[]> {
+	const res = await fetch("https://api.openai.com/v1/chat/completions", {
+		method: "POST",
+		headers: {
+			"content-type": "application/json",
+			authorization: `Bearer ${apiKey}`,
+		},
+		body: JSON.stringify({
+			model: "gpt-4o-mini",
+			messages: [
+				{
+					role: "system",
+					content: "You generate realistic sample demo data as strict JSON matching the given schema.",
+				},
+				{ role: "user", content: buildTablePrompt(businessType, table) },
+			],
+			response_format: {
+				type: "json_schema",
+				json_schema: {
+					name: `${table.name}_rows`,
+					strict: true,
+					schema: buildTableSchema(table),
+				},
 			},
-			{ role: "user", content: prompt },
-		],
-		response_format: { type: "json_schema", json_schema: schema },
-		max_tokens: 4096,
+			max_tokens: 2000,
+		}),
 	});
 
-	let data: Record<string, unknown[]>;
-	const raw = aiResponse?.response ?? aiResponse;
-	try {
-		data = typeof raw === "string" ? JSON.parse(raw) : raw;
-	} catch {
-		throw new Error("The AI didn't return valid JSON — try again.");
+	if (!res.ok) {
+		const text = await res.text().catch(() => "");
+		throw new Error(`OpenAI error for "${table.name}" (${res.status}): ${text.slice(0, 300)}`);
 	}
 
-	repairKnownRelationships(data);
+	const data: any = await res.json();
+	const content = data.choices?.[0]?.message?.content;
+	if (!content) throw new Error(`OpenAI returned no content for "${table.name}"`);
 
-	const deleteOrder = ["order_items", "orders", "products", "customers"];
-	const tableNames = tables.map((t) => t.name);
-	const orderedForDelete = [
-		...deleteOrder.filter((n) => tableNames.includes(n)),
-		...tableNames.filter((n) => !deleteOrder.includes(n)),
-	];
-	for (const name of orderedForDelete) {
+	let parsed: any;
+	try {
+		parsed = JSON.parse(content);
+	} catch {
+		throw new Error(`OpenAI didn't return valid JSON for "${table.name}"`);
+	}
+	return Array.isArray(parsed.rows) ? parsed.rows : [];
+}
+
+/** Generalized FK repair using real schema metadata (works for any
+ * collection, not just the original 4 tables) — replaces any foreign-key
+ * value the model got wrong with a real value from the referenced table's
+ * freshly generated rows. */
+function repairForeignKeys(
+	tables: TableConfig[],
+	fkMap: Map<string, ForeignKey[]>,
+	data: Record<string, Array<Record<string, unknown>>>,
+) {
+	for (const table of tables) {
+		const fks = fkMap.get(table.name) || [];
+		const rows = data[table.name] || [];
+		for (const fk of fks) {
+			const refRows = data[fk.table] || [];
+			const refValues = refRows.map((r) => r[fk.to]).filter((v) => v !== undefined && v !== null && v !== "");
+			if (!refValues.length) continue;
+			for (const row of rows) {
+				if (!refValues.includes(row[fk.from])) {
+					row[fk.from] = refValues[Math.floor(Math.random() * refValues.length)];
+				}
+			}
+		}
+	}
+}
+
+async function generateRecords(db: D1Database, apiKey: string, businessType: string) {
+	if (!apiKey) throw new Error("OPENAI_API_KEY is not configured — run 'wrangler secret put OPENAI_API_KEY'.");
+
+	const tables = await getAllTableConfigs(db);
+	const fkMap = new Map<string, ForeignKey[]>();
+	for (const t of tables) fkMap.set(t.name, await getForeignKeys(db, t.name));
+
+	// Small, independent, per-collection requests run concurrently — much
+	// faster and more reliable than one giant multi-table structured call.
+	const results = await Promise.all(
+		tables.map(async (t) => ({ name: t.name, rows: await callOpenAI(apiKey, businessType, t) })),
+	);
+	const data: Record<string, Array<Record<string, unknown>>> = {};
+	for (const r of results) data[r.name] = r.rows;
+
+	repairForeignKeys(tables, fkMap, data);
+
+	const insertOrder = await topoSortByForeignKeys(db, tables); // parents first
+	const deleteOrder = [...insertOrder].reverse(); // children first
+
+	for (const name of deleteOrder) {
 		await db.prepare(`DELETE FROM "${name}"`).run();
 	}
 
-	const insertOrder = ["customers", "products", "orders", "order_items"];
-	const orderedForInsert = [
-		...insertOrder.filter((n) => tableNames.includes(n)),
-		...tableNames.filter((n) => !insertOrder.includes(n)),
-	];
-	for (const name of orderedForInsert) {
+	for (const name of insertOrder) {
 		const table = tables.find((t) => t.name === name)!;
-		const rows = (data[name] as Array<Record<string, unknown>>) || [];
-		for (const row of rows) {
+		for (const row of data[name] || []) {
 			const cols = table.columns.filter((c) => c.name !== "rowid" && row[c.name] !== undefined);
 			if (!cols.length) continue;
 			const placeholders = cols.map(() => "?").join(", ");
@@ -491,7 +399,7 @@ export async function handleAdmin(request: Request, env: Env): Promise<Response 
 		if (url.pathname === "/db/api/generate" && request.method === "POST") {
 			const body = await request.json<{ business_type?: string }>();
 			if (!body.business_type) return json({ error: "Missing business_type" }, 400);
-			await generateRecords(env.DB, env.AI, body.business_type);
+			await generateRecords(env.DB, env.OPENAI_API_KEY, body.business_type);
 			return json({ ok: true });
 		}
 
@@ -605,6 +513,7 @@ function renderPage(): string {
 		margin-left: 6px;
 	}
 	.btn:hover { background: #f5f5f6; }
+	.btn:disabled { opacity: .5; cursor: default; }
 	.btn.primary { background: #d97757; border-color: #d97757; color: #fff; }
 	.btn.primary:hover { background: #c8663f; }
 	main { padding: 24px; max-width: 1100px; margin: 0 auto; }
@@ -692,6 +601,30 @@ function renderPage(): string {
 	.modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 	.modal .hint { font-size: 12px; color: #8a8a8e; margin-top: 4px; }
 	.link-btn { background: none; border: none; color: #d97757; font-size: 12.5px; cursor: pointer; padding: 6px 0; }
+	.gen-status {
+		display: none;
+		align-items: center;
+		gap: 8px;
+		margin-top: 14px;
+		padding: 10px 12px;
+		border-radius: 8px;
+		background: #f7f7f8;
+		font-size: 12.5px;
+		color: #444;
+	}
+	.gen-status.show { display: flex; }
+	.gen-status.gen-status-error { background: #fdf0f0; color: #a33; }
+	.gen-status.gen-status-ok { background: #f0f9f0; color: #2a6b2a; }
+	.spinner {
+		width: 14px; height: 14px;
+		border: 2px solid #d8d8db;
+		border-top-color: #d97757;
+		border-radius: 50%;
+		animation: spin .7s linear infinite;
+		flex-shrink: 0;
+	}
+	.gen-status-error .spinner, .gen-status-ok .spinner { display: none; }
+	@keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -745,12 +678,16 @@ function renderPage(): string {
 <div class="overlay" id="overlay-generate">
 	<div class="modal">
 		<h3>Generate Records</h3>
-		<p class="hint">Replaces the rows in every collection with data appropriate for the business type you pick.</p>
+		<p class="hint">Replaces the rows in every collection with data appropriate for the business type you pick. Runs one small request per collection in parallel.</p>
 		<label>Business type</label>
 		<select id="gen-business-type"></select>
 		<div id="gen-custom-wrap" style="display:none;">
 			<label>Describe your business</label>
 			<input type="text" id="gen-custom" placeholder="e.g. artisanal cheese subscription box" />
+		</div>
+		<div class="gen-status" id="gen-status">
+			<div class="spinner"></div>
+			<span class="gen-status-text">Processing…</span>
 		</div>
 		<div class="actions">
 			<button class="btn" onclick="closeModal('overlay-generate')">Cancel</button>
@@ -984,6 +921,8 @@ document.getElementById("btn-generate").onclick = async () => {
 	select.onchange = () => {
 		document.getElementById("gen-custom-wrap").style.display = select.value === "__custom__" ? "block" : "none";
 	};
+	const status = document.getElementById("gen-status");
+	status.classList.remove("show", "gen-status-error", "gen-status-ok");
 	openModal("overlay-generate");
 };
 
@@ -993,22 +932,46 @@ async function submitGenerate() {
 		? document.getElementById("gen-custom").value.trim()
 		: select.value;
 	if (!businessType) return;
+
 	const btn = document.getElementById("gen-submit");
+	const status = document.getElementById("gen-status");
+	const statusText = status.querySelector(".gen-status-text");
+
 	btn.disabled = true;
-	btn.textContent = "Generating…";
+	select.disabled = true;
+	status.classList.remove("gen-status-error", "gen-status-ok");
+	status.classList.add("show");
+	let seconds = 0;
+	statusText.textContent = "Processing… (0s)";
+	const ticker = setInterval(() => {
+		seconds += 1;
+		statusText.textContent = "Processing… (" + seconds + "s)";
+	}, 1000);
+
+	const controller = new AbortController();
+	const abortTimer = setTimeout(() => controller.abort(), 28000);
+
 	try {
 		await api("/db/api/generate", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ business_type: businessType }),
+			signal: controller.signal,
 		});
-		closeModal("overlay-generate");
+		status.classList.add("gen-status-ok");
+		statusText.textContent = "Done!";
 		loadTable(activeTable);
+		setTimeout(() => closeModal("overlay-generate"), 600);
 	} catch (err) {
-		alert("Generation failed: " + err.message);
+		status.classList.add("gen-status-error");
+		statusText.textContent = err.name === "AbortError"
+			? "Timed out after 28s client-side (it may still finish server-side — reload the table in a moment) — try again."
+			: "Failed: " + err.message;
 	} finally {
+		clearInterval(ticker);
+		clearTimeout(abortTimer);
 		btn.disabled = false;
-		btn.textContent = "Generate";
+		select.disabled = false;
 	}
 }
 

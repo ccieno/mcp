@@ -1,18 +1,30 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { z } from "zod";
-import { checkProductInventory, getOrderDetails, lookupCustomerAccount } from "./db";
+import {
+	checkProductInventory,
+	getOrderDetails,
+	listCollectionNames,
+	lookupCustomerAccount,
+	queryCollection,
+} from "./db";
 import { handleRest } from "./rest";
 import { handleAdmin } from "./admin";
 
 interface Env {
 	DB: D1Database;
-	AI: Ai;
+	OPENAI_API_KEY: string;
 	MCP_OBJECT: DurableObjectNamespace<MyMCP>;
 }
 
+function errorText(err: unknown) {
+	return { content: [{ type: "text" as const, text: `Error: ${(err as Error).message}` }] };
+}
+
 // Demo backend for Zoom Virtual Agent: exposes order details, customer
-// account lookup, and product inventory as MCP tools backed by D1.
+// account lookup, and product inventory as MCP tools backed by D1, plus a
+// generic query_collection tool that covers any collection added later via
+// the /db admin UI without needing a bespoke tool written for it.
 export class MyMCP extends McpAgent<Env> {
 	server = new McpServer({
 		name: "ZVA Demo Backend",
@@ -30,19 +42,21 @@ export class MyMCP extends McpAgent<Env> {
 				},
 			},
 			async ({ order_id }) => {
-				const result = await getOrderDetails(this.env.DB, order_id);
-
-				if (!result) {
+				try {
+					const result = await getOrderDetails(this.env.DB, order_id);
+					if (!result) {
+						return {
+							content: [
+								{ type: "text", text: `No order found with ID "${order_id}".` },
+							],
+						};
+					}
 					return {
-						content: [
-							{ type: "text", text: `No order found with ID "${order_id}".` },
-						],
+						content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
 					};
+				} catch (err) {
+					return errorText(err);
 				}
-
-				return {
-					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-				};
 			},
 		);
 
@@ -58,22 +72,24 @@ export class MyMCP extends McpAgent<Env> {
 				},
 			},
 			async ({ query }) => {
-				const result = await lookupCustomerAccount(this.env.DB, query);
-
-				if (!result) {
+				try {
+					const result = await lookupCustomerAccount(this.env.DB, query);
+					if (!result) {
+						return {
+							content: [
+								{
+									type: "text",
+									text: `No customer account found matching "${query}".`,
+								},
+							],
+						};
+					}
 					return {
-						content: [
-							{
-								type: "text",
-								text: `No customer account found matching "${query}".`,
-							},
-						],
+						content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
 					};
+				} catch (err) {
+					return errorText(err);
 				}
-
-				return {
-					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-				};
 			},
 		);
 
@@ -87,19 +103,57 @@ export class MyMCP extends McpAgent<Env> {
 				},
 			},
 			async ({ query }) => {
-				const products = await checkProductInventory(this.env.DB, query);
+				try {
+					const products = await checkProductInventory(this.env.DB, query);
+					if (!products.length) {
+						return {
+							content: [
+								{ type: "text", text: `No products found matching "${query}".` },
+							],
+						};
+					}
+					return {
+						content: [{ type: "text", text: JSON.stringify(products, null, 2) }],
+					};
+				} catch (err) {
+					return errorText(err);
+				}
+			},
+		);
 
-				if (!products.length) {
+		this.server.registerTool(
+			"query_collection",
+			{
+				description:
+					"Generic lookup over any collection in the demo database, including ones added later via the /db admin UI (e.g. a custom 'suppliers' table). Pass no query to list a sample of rows.",
+				inputSchema: {
+					collection: z
+						.string()
+						.describe("Collection/table name — call without a query first if unsure what's available"),
+					query: z
+						.string()
+						.optional()
+						.describe("Optional search term matched against the collection's ID and text columns"),
+				},
+			},
+			async ({ collection, query }) => {
+				try {
+					const results = await queryCollection(this.env.DB, collection, query);
+					if (!results.length) {
+						return { content: [{ type: "text", text: `No rows found in "${collection}".` }] };
+					}
+					return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+				} catch (err) {
+					const names = await listCollectionNames(this.env.DB).catch(() => []);
 					return {
 						content: [
-							{ type: "text", text: `No products found matching "${query}".` },
+							{
+								type: "text",
+								text: `${(err as Error).message}${names.length ? ` Available collections: ${names.join(", ")}.` : ""}`,
+							},
 						],
 					};
 				}
-
-				return {
-					content: [{ type: "text", text: JSON.stringify(products, null, 2) }],
-				};
 			},
 		);
 	}
