@@ -26,17 +26,16 @@
 		{
 			"binding": "DB",
 			"database_name": "zva-demo-db",
-			"database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+			"database_id": "da455853-8728-4d71-b2aa-a870e098eb7e"
 		}
 	],
+	"ai": {
+		"binding": "AI"
+	},
 	"observability": {
 		"enabled": true
-	}
-	// To publish the /db admin UI at app.eno.solutions/db, either add a
-	// route here (uncomment + set your real zone_name) or add it via
-	// Cloudflare dashboard: Workers & Pages -> zva-demo-mcp -> Settings ->
-	// Domains & Routes -> Add route. See README for details.
-	// "routes": [
-	// 	{ "pattern": "app.eno.solutions/db*", "zone_name": "eno.solutions" }
-	// ]
+	},
+	"routes": [
+		{ "pattern": "app.eno.solutions/db*", "zone_name": "eno.solutions" }
+	]
 }

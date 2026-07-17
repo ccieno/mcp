@@ -115,9 +115,36 @@ your zone to this Worker, alongside whatever already serves the rest of
    want it discoverable from `/` — this Worker only serves the `/db` path
    itself.
 
-Every cell marked editable in the table (name, price, stock, status, etc.)
-saves via `PATCH` on blur/change; read-only columns (IDs, timestamps) are
-shown as plain text.
+Every cell marked editable in the table saves via `PATCH` on blur/change;
+each table's primary key column is read-only (shown as plain text).
+
+## Admin UI features
+
+The schema is introspected live from D1 (`sqlite_master` + `PRAGMA
+table_info`) rather than hardcoded, so the UI adapts automatically as you
+change things:
+
+- **+ Column** — adds a column to the current collection (`ALTER TABLE ...
+  ADD COLUMN`).
+- **Rename column** — click directly on a column header and edit it; renames
+  on blur (`ALTER TABLE ... RENAME COLUMN`).
+- **+ Row** — inserts a new row with sensible defaults (auto-generated ID,
+  empty/zero values, and any required foreign keys borrowed from an existing
+  row so the insert doesn't violate D1's FK constraints) so you can edit it
+  in place immediately.
+- **+ Collection** — creates a brand new table (`id TEXT PRIMARY KEY` plus
+  whatever columns you define) and it shows up as a new tab right away.
+- **✨ Generate Records** — pick a business type (25 presets, or "Other" to
+  describe your own) and it replaces the rows in every collection with data
+  generated for that business via Workers AI (e.g. a travel company gets
+  destination packages as "products"; a clothing company gets garments).
+  Known relationships (orders → customers, order_items → orders/products)
+  are repaired after generation in case the model drifts.
+
+**Requires Workers AI:** the `AI` binding in `wrangler.jsonc` needs Workers AI
+enabled on your Cloudflare account (small per-request cost/usage against your
+account's Workers AI allowance; no separate API key needed). If Generate
+Records errors, check `npx wrangler tail` for the actual failure.
 
 ## Notes
 
@@ -126,3 +153,9 @@ shown as plain text.
 - MCP (`/mcp`) and ZVA's Custom API action (`/api/...`) are different
   protocols — the MCP endpoint is for MCP-speaking AI clients/tooling, the
   REST endpoints are what ZVA itself can actually call from a flow.
+- **Known limitation:** the MCP tools (`src/index.ts`) and REST handlers
+  (`src/db.ts`) are written against the *original* column names
+  (`customers.name`, `orders.status`, `order_items.product_sku`, etc.). If
+  you rename or remove those specific columns from the admin UI, those tools
+  will break until you update the queries in `src/db.ts` to match. Adding new
+  columns or new collections doesn't affect them.

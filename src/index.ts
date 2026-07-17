@@ -7,6 +7,7 @@ import { handleAdmin } from "./admin";
 
 interface Env {
 	DB: D1Database;
+	AI: Ai;
 	MCP_OBJECT: DurableObjectNamespace<MyMCP>;
 }
 
