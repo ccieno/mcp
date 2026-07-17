@@ -4,9 +4,10 @@ A small Cloudflare Worker that demos a Zoom Virtual Agent (ZVA) backend: order
 details, customer account lookups, and product inventory, backed by a
 Cloudflare D1 database. It exposes the same three lookups two ways:
 
-- **MCP** at `/mcp` — for AI clients that speak the Model Context Protocol
-  (Claude Desktop, the Cloudflare AI Playground, MCP Inspector, or a custom
-  agent).
+- **MCP** at `/mcp` (Streamable HTTP, current spec) and `/sse` (legacy SSE
+  transport) — same tools either way, for AI clients that speak the Model
+  Context Protocol (Claude Desktop, the Cloudflare AI Playground, MCP
+  Inspector, Zoom Virtual Agent, or a custom agent).
 - **Plain REST** at `/api/...` — for Zoom Virtual Agent's flow-builder
   **Custom API** / Action step, which calls a regular JSON HTTP endpoint, not
   raw MCP. Use this path to actually wire the data into a ZVA bot flow.
