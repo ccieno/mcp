@@ -25,7 +25,17 @@ Cloudflare D1 database. It exposes the same three lookups two ways:
 
 `query` matches the row's ID plus any text column (email, name, phone
 number, etc. — whatever text columns currently exist). Sample seed data
-lives in `schema.sql` (6 customers, 8 products, 8 orders with line items).
+lives in `schema.sql` (8 customers, 8 products, 8 orders with line items).
+
+Customer phone numbers use Ofcom's reserved fictional-use ranges (E.164
+UK): `+441632960000`–`+441632960999` (geographic) and
+`+447700900000`–`+447700900999` (mobile) — safe to generate freely, never
+real subscribers. Two records always exist with fixed, non-Ofcom numbers for
+testing: **Joe Bloggs** (`+447794516641`) and **James Smith**
+(`+442038852824`). Generate Records enforces both rules deterministically
+after the AI response comes back (see `enforcePhoneFormat` /
+`enforceGuaranteedCustomers` in `src/admin.ts`), so they hold regardless of
+business type or what the model actually generates.
 
 `query_collection` / `/api/collections/:name` works over **any** table,
 including ones you add later via **+ Collection** in the admin UI — no code
