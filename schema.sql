@@ -16,7 +16,13 @@ CREATE TABLE customers (
 	created_at TEXT,
 	phone_number TEXT,
 	language TEXT,                 -- e.g. en, es, fr
-	loyalty_tier TEXT               -- e.g. Bronze, Silver, Gold, Platinum
+	loyalty_tier TEXT,              -- e.g. Bronze, Silver, Gold, Platinum
+	date TEXT,                     -- appointment date, e.g. 2026-08-03
+	time TEXT,                     -- appointment time, e.g. 09:30
+	location TEXT,                 -- e.g. Riverside Clinic
+	appointment_type TEXT,         -- e.g. General Checkup, Follow-up, Vaccination
+	doctor TEXT,
+	reference TEXT                  -- appointment reference code, e.g. REF-10234
 );
 
 CREATE TABLE products (
@@ -54,15 +60,15 @@ CREATE INDEX idx_order_items_order ON order_items(order_id);
 -- +441632960000-960999, mobile +447700900000-900999, both E.164 formatted.
 -- Joe Bloggs and James Smith are guaranteed test records with fixed numbers
 -- (kept in sync by Generate Records too — see src/admin.ts).
-INSERT INTO customers (id, name, email, company, plan_tier, account_status, created_at, phone_number, language, loyalty_tier) VALUES
-('ACC-1001', 'Dana Whitfield', 'dana.whitfield@brightloop.io', 'Brightloop', 'Business', 'Active', '2023-02-14', '+441632960142', 'en', 'Gold'),
-('ACC-1002', 'Marcus Ide', 'marcus.ide@nordlyworks.com', 'Nordly Works', 'Pro', 'Active', '2023-05-30', '+447700900187', 'en', 'Silver'),
-('ACC-1003', 'Priya Naik', 'priya.naik@fernhollow.co', 'Fern Hollow', 'Free', 'Active', '2024-01-09', '+441632960958', 'en', 'Bronze'),
-('ACC-1004', 'Oliver Bass', 'oliver.bass@quarrytech.com', 'Quarry Tech', 'Business', 'Past Due', '2022-11-02', '+447700900173', 'en', 'Gold'),
-('ACC-1005', 'Selene Marsh', 'selene.marsh@cobaltline.com', 'Cobalt Line', 'Pro', 'Suspended', '2023-09-18', '+441632960122', 'en', 'Silver'),
-('ACC-1006', 'Terrence Boyle', 'terrence.boyle@driftandco.com', 'Drift & Co', 'Business', 'Active', '2021-07-21', '+447700900199', 'en', 'Platinum'),
-('ACC-1007', 'Joe Bloggs', 'joe.bloggs@example.com', 'Bloggs & Co', 'Free', 'Active', '2024-03-11', '+447794516641', 'en', 'Bronze'),
-('ACC-1008', 'James Smith', 'james.smith@example.com', 'Smith Consulting', 'Pro', 'Active', '2023-08-22', '+442038852824', 'en', 'Silver');
+INSERT INTO customers (id, name, email, company, plan_tier, account_status, created_at, phone_number, language, loyalty_tier, date, time, location, appointment_type, doctor, reference) VALUES
+('ACC-1001', 'Dana Whitfield', 'dana.whitfield@brightloop.io', 'Brightloop', 'Business', 'Active', '2023-02-14', '+441632960142', 'en', 'Gold', '2026-08-03', '09:30', 'Riverside Clinic', 'General Checkup', 'Dr. Amara Chen', 'REF-10234'),
+('ACC-1002', 'Marcus Ide', 'marcus.ide@nordlyworks.com', 'Nordly Works', 'Pro', 'Active', '2023-05-30', '+447700900187', 'en', 'Silver', '2026-08-05', '11:00', 'Central Health Centre', 'Follow-up', 'Dr. Liam Foster', 'REF-10235'),
+('ACC-1003', 'Priya Naik', 'priya.naik@fernhollow.co', 'Fern Hollow', 'Free', 'Active', '2024-01-09', '+441632960958', 'en', 'Bronze', '2026-08-06', '14:15', 'Riverside Clinic', 'Vaccination', 'Dr. Amara Chen', 'REF-10236'),
+('ACC-1004', 'Oliver Bass', 'oliver.bass@quarrytech.com', 'Quarry Tech', 'Business', 'Past Due', '2022-11-02', '+447700900173', 'en', 'Gold', '2026-08-07', '10:45', 'Northside Surgery', 'Consultation', 'Dr. Priya Osei', 'REF-10237'),
+('ACC-1005', 'Selene Marsh', 'selene.marsh@cobaltline.com', 'Cobalt Line', 'Pro', 'Suspended', '2023-09-18', '+441632960122', 'en', 'Silver', '2026-08-08', '15:30', 'Central Health Centre', 'General Checkup', 'Dr. Liam Foster', 'REF-10238'),
+('ACC-1006', 'Terrence Boyle', 'terrence.boyle@driftandco.com', 'Drift & Co', 'Business', 'Active', '2021-07-21', '+447700900199', 'en', 'Platinum', '2026-08-10', '09:00', 'Northside Surgery', 'Follow-up', 'Dr. Priya Osei', 'REF-10239'),
+('ACC-1007', 'Joe Bloggs', 'joe.bloggs@example.com', 'Bloggs & Co', 'Free', 'Active', '2024-03-11', '+447794516641', 'en', 'Bronze', '2026-08-11', '13:00', 'Riverside Clinic', 'General Checkup', 'Dr. Amara Chen', 'REF-10240'),
+('ACC-1008', 'James Smith', 'james.smith@example.com', 'Smith Consulting', 'Pro', 'Active', '2023-08-22', '+442038852824', 'en', 'Silver', '2026-08-12', '16:20', 'Central Health Centre', 'Consultation', 'Dr. Liam Foster', 'REF-10241');
 
 -- Products
 INSERT INTO products (sku, name, category, price, stock_quantity, warehouse_location) VALUES

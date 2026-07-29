@@ -64,11 +64,13 @@ export class MyMCP extends McpAgent<Env> {
 			"lookup_customer_account",
 			{
 				description:
-					"Find a customer account by account ID, email, or name, and list their 5 most recent orders.",
+					"Find a customer account by any of its fields — account ID, name, email, phone number, appointment reference, doctor, location, appointment type, date, or time — and return every field on that customer plus their 5 most recent orders.",
 				inputSchema: {
 					query: z
 						.string()
-						.describe("Account ID (ACC-1001), email, or customer name"),
+						.describe(
+							"Any customer field to match: account ID (ACC-1001), name, email, phone number, appointment reference (REF-10234), doctor, location, or appointment type",
+						),
 				},
 			},
 			async ({ query }) => {
