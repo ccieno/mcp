@@ -572,7 +572,7 @@ function renderPage(): string {
 	.btn:disabled { opacity: .5; cursor: default; }
 	.btn.primary { background: #d97757; border-color: #d97757; color: #fff; }
 	.btn.primary:hover { background: #c8663f; }
-	main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+	main { padding: 24px; max-width: min(1800px, 96vw); margin: 0 auto; }
 	.toolbar { display: flex; align-items: center; margin-bottom: 12px; }
 	.toolbar .spacer { flex: 1; }
 	.card {
@@ -581,15 +581,16 @@ function renderPage(): string {
 		border-radius: 10px;
 		overflow: auto;
 	}
-	table { width: 100%; border-collapse: collapse; font-size: 13px; }
+	table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
 	thead th {
+		position: relative;
 		text-align: left;
 		font-weight: 600;
 		color: #6b6b70;
 		padding: 0;
 		background: #fafafa;
 		border-bottom: 1px solid #e5e5e7;
-		white-space: nowrap;
+		overflow: hidden;
 	}
 	thead th input {
 		width: 100%;
@@ -600,14 +601,30 @@ function renderPage(): string {
 		font-weight: 600;
 		color: #6b6b70;
 		font-family: inherit;
+		text-overflow: ellipsis;
 	}
 	thead th input:focus { outline: none; border-color: #d97757; background: #fffaf7; }
+	.col-resize-handle {
+		position: absolute;
+		top: 0; right: 0; bottom: 0;
+		width: 6px;
+		cursor: col-resize;
+		z-index: 2;
+	}
+	.col-resize-handle:hover, .col-resize-handle.resizing { background: #d97757; opacity: .5; }
 	tbody td {
 		padding: 0;
 		border-bottom: 1px solid #f0f0f1;
+		overflow: hidden;
 	}
 	tbody tr:last-child td { border-bottom: none; }
-	td.readonly { padding: 10px 12px; color: #444; }
+	td.readonly {
+		padding: 10px 12px;
+		color: #444;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
 	td input {
 		width: 100%;
 		border: 1px solid transparent;
@@ -794,6 +811,56 @@ function renderTabs() {
 	}
 }
 
+// Columns that should size themselves to their longest value rather than
+// use a fixed default width. A manual drag-resize (see resizedWidths)
+// always takes priority over this.
+const AUTO_SIZE_COLUMNS = new Set(["name", "email", "date", "location", "appointment_type", "doctor"]);
+const resizedWidths = {}; // "table.column" -> px, set once the user drags a header
+
+function estimateColumnWidth(col, rows) {
+	const CHAR_PX = 7.2;
+	const PADDING = 30;
+	const MIN = 90;
+	const MAX = 420;
+	let longest = col.label.length;
+	for (const row of rows) {
+		const v = row[col.name];
+		if (v != null) longest = Math.max(longest, String(v).length);
+	}
+	return Math.min(MAX, Math.max(MIN, Math.round(longest * CHAR_PX + PADDING)));
+}
+
+function defaultColumnWidth(col) {
+	return col.type === "number" ? 90 : 140;
+}
+
+function columnWidthFor(tableName, col, rows) {
+	const key = tableName + "." + col.name;
+	if (resizedWidths[key]) return resizedWidths[key];
+	if (AUTO_SIZE_COLUMNS.has(col.name)) return estimateColumnWidth(col, rows);
+	return defaultColumnWidth(col);
+}
+
+function startColumnResize(evt, tableName, colName, colEl, handleEl) {
+	evt.preventDefault();
+	const startX = evt.clientX;
+	const startWidth = colEl.getBoundingClientRect().width;
+	handleEl.classList.add("resizing");
+
+	function onMove(moveEvt) {
+		const next = Math.max(60, Math.min(700, startWidth + (moveEvt.clientX - startX)));
+		colEl.style.width = next + "px";
+		resizedWidths[tableName + "." + colName] = next;
+	}
+	function onUp() {
+		handleEl.classList.remove("resizing");
+		document.removeEventListener("mousemove", onMove);
+		document.removeEventListener("mouseup", onUp);
+	}
+	document.addEventListener("mousemove", onMove);
+	document.addEventListener("mouseup", onUp);
+}
+
 async function loadTable(name) {
 	const config = schema.find((t) => t.name === name);
 	const container = document.getElementById("table-container");
@@ -801,9 +868,19 @@ async function loadTable(name) {
 	const rows = await api("/db/api/" + name);
 
 	const table = document.createElement("table");
+
+	const colgroup = document.createElement("colgroup");
+	const colEls = config.columns.map((col) => {
+		const colEl = document.createElement("col");
+		colEl.style.width = columnWidthFor(name, col, rows) + "px";
+		colgroup.appendChild(colEl);
+		return colEl;
+	});
+	table.appendChild(colgroup);
+
 	const thead = document.createElement("thead");
 	const headRow = document.createElement("tr");
-	for (const col of config.columns) {
+	config.columns.forEach((col, i) => {
 		const th = document.createElement("th");
 		if (col.editable) {
 			const input = document.createElement("input");
@@ -814,9 +891,15 @@ async function loadTable(name) {
 		} else {
 			th.textContent = col.label;
 			th.style.padding = "10px 12px";
+			th.style.whiteSpace = "nowrap";
 		}
+		const handle = document.createElement("div");
+		handle.className = "col-resize-handle";
+		handle.title = "Drag to resize";
+		handle.addEventListener("mousedown", (e) => startColumnResize(e, name, col.name, colEls[i], handle));
+		th.appendChild(handle);
 		headRow.appendChild(th);
-	}
+	});
 	thead.appendChild(headRow);
 	table.appendChild(thead);
 
